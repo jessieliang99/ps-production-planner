@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Print Station Production Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
+<script>
+/* ============================================================
+   SETTINGS — fill these in once (see SETUP.md, step 1)
+   ============================================================ */
+window.PLANNER_CONFIG = {
+  clientId: "PASTE-APPLICATION-CLIENT-ID-HERE",
+  tenantId: "PASTE-DIRECTORY-TENANT-ID-HERE",
+  mailbox: "production@printstation.com.au",
+  sender: "mail@printstation.com.au",
+  defaultRuns: ["PS Delivery", "Go Logistics", "StarTrack / Australia Post"],
+  stateFile: "PrintStation Planner/planner-state.json"
+};
+</script>
+<style>
+/* Layout idea: a production board. Stage columns left to right, machine lanes inside the queue column,
+   delivery runs as their own view; the same page scales up for the factory TV (#tv) and down for phones. */
+:root {
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --ink: #15202b;
+  --muted: #5d6b78;
+  --line: #dde3e9;
+  --accent: #0a7ea4;
+  --accent-ink: #ffffff;
+  --accent-soft: #e3f2f8;
+  --good: #1d7a46; --good-soft: #e3f4ea;
+  --warn: #9a5b00; --warn-soft: #fdf0dc;
+  --bad: #b42318;  --bad-soft: #fde7e5;
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f151b; --surface: #17212a; --ink: #e6edf3; --muted: #93a2b0; --line: #2a3742;
+    --accent: #3fb6dc; --accent-ink: #062330; --accent-soft: #123342;
+    --good: #5ccf8c; --good-soft: #143424; --warn: #f0b34e; --warn-soft: #3a2c12; --bad: #ff8a7f; --bad-soft: #3d1a17;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f151b; --surface: #17212a; --ink: #e6edf3; --muted: #93a2b0; --line: #2a3742;
+  --accent: #3fb6dc; --accent-ink: #062330; --accent-soft: #123342;
+  --good: #5ccf8c; --good-soft: #143424; --warn: #f0b34e; --warn-soft: #3a2c12; --bad: #ff8a7f; --bad-soft: #3d1a17;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.45 var(--font-body); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+a { color: var(--accent); }
+.wrap { max-width: 1520px; margin: 0 auto; padding: 18px 16px 48px; display: flex; flex-direction: column; gap: 14px; }
+
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand h1 { font: 800 22px/1.1 var(--font-display); margin: 0; letter-spacing: -0.01em; }
+.brand small { display: block; font: 500 12px/1.3 var(--font-body); color: var(--muted); }
+.clock { font: 700 20px/1 var(--font-display); font-variant-numeric: tabular-nums; display: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.search { position: relative; flex: 1 1 300px; max-width: 440px; }
+.search input { width: 100%; padding: 10px 12px 10px 36px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.search svg { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--muted); }
+select, .btn { padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.btn.small { padding: 5px 10px; font-size: 13px; }
+.btn.ghost { background: transparent; }
+.btn:disabled { opacity: .55; cursor: default; }
+
+.status-line { font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; min-height: 20px; }
+.notice { padding: 12px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.notice.bad { border-color: var(--bad); background: var(--bad-soft); }
+.notice.warn { border-color: var(--warn); background: var(--warn-soft); }
+
+.tabs { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.tab { text-align: left; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); cursor: pointer; display: flex; flex-direction: column; gap: 2px; }
+.tab .n { font: 700 24px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.tab .l { font-size: 13px; color: var(--muted); }
+.tab[aria-selected="true"] { border-color: var(--accent); box-shadow: inset 0 -3px 0 var(--accent); }
+.tab.deliver .n { color: var(--accent); }
+.tab.pickup .n { color: var(--warn); }
+@media (max-width: 720px) { .tabs { grid-template-columns: repeat(3, minmax(0, 1fr)); } .tab .n { font-size: 20px; } }
+@media (max-width: 420px) { .tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chips .lbl { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-right: 4px; }
+.chip { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 5px 11px; font-size: 13px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; }
+.chip b { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.chip[aria-pressed="true"] b { color: var(--bg); }
+
+/* Board */
+.board-scroll { overflow-x: auto; padding-bottom: 4px; }
+.board { display: grid; grid-template-columns: repeat(5, minmax(230px, 1fr)); gap: 12px; align-items: start; min-width: 1180px; }
+@media (max-width: 900px) { .board { grid-template-columns: 1fr; min-width: 0; } }
+.col { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; display: flex; flex-direction: column; min-height: 120px; }
+.col-head { padding: 12px 14px 10px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 8px; }
+.col-head h2 { margin: 0; font: 700 14px/1.2 var(--font-display); }
+.col-head .n { margin-left: auto; font: 700 18px/1 var(--font-display); font-variant-numeric: tabular-nums; }
+.col-head small { display: block; font-size: 12px; color: var(--muted); font-weight: 400; margin-top: 2px; }
+.col.c-deliver { border-top: 3px solid var(--accent); }
+.col.c-pickup { border-top: 3px solid var(--warn); }
+.col-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; max-height: 72vh; overflow-y: auto; }
+.lane { display: flex; flex-direction: column; gap: 6px; }
+.lane + .lane { margin-top: 6px; }
+.lane-head { font: 600 12px/1.2 var(--font-body); text-transform: uppercase; letter-spacing: .05em; color: var(--muted); display: flex; justify-content: space-between; padding: 2px 2px 0; }
+.card { border: 1px solid var(--line); border-radius: 8px; padding: 9px 10px; background: var(--bg); cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
+.card:hover { border-color: var(--accent); }
+.card.over { border-left: 3px solid var(--bad); }
+.card.rush { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
+.card-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.card-foot { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: space-between; margin-top: 2px; }
+.col-empty { color: var(--muted); font-size: 13px; padding: 14px 6px; text-align: center; }
+
+.jobno { font: 600 15px/1 var(--font-mono); font-variant-numeric: tabular-nums; }
+.co { font-weight: 600; overflow-wrap: anywhere; font-size: 14px; }
+.desc { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+.due { font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.due.over { color: var(--bad); font-weight: 600; }
+.mach { font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px; background: var(--accent-soft); color: var(--accent); }
+.mach.none { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+.tag-rush { font-size: 11px; font-weight: 700; letter-spacing: .06em; padding: 2px 6px; border-radius: 4px; background: var(--bad); color: #fff; }
+.tag-run { font-size: 11.5px; font-weight: 600; padding: 2px 7px; border-radius: 4px; border: 1px solid var(--line); color: var(--ink); }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+.pill.good { background: var(--good-soft); color: var(--good); }
+.pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.plain { background: transparent; border: 1px solid var(--line); color: var(--muted); }
+
+/* Lists */
+.list { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.row { display: grid; grid-template-columns: 92px minmax(0, 1.4fr) minmax(0, 1fr) 120px 190px; gap: 14px; align-items: center; padding: 12px 16px; border-top: 1px solid var(--line); cursor: pointer; }
+.row:first-child { border-top: 0; }
+.row:hover { background: var(--accent-soft); }
+.row.head { cursor: default; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; padding-top: 10px; padding-bottom: 10px; }
+.row.head:hover { background: transparent; }
+.where { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.empty { padding: 36px 16px; text-align: center; color: var(--muted); }
+.m-due { display: none; font-size: 12.5px; margin-top: 2px; }
+@media (max-width: 820px) {
+  .row { grid-template-columns: 76px minmax(0, 1fr) auto; }
+  .row .col-where, .row .col-due { display: none; }
+  .row.head { display: none; }
+  .row .m-due { display: block; }
+}
+
+/* Delivery runs */
+.runs { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; align-items: start; }
+.run { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.run.unassigned { border-top: 3px solid var(--warn); }
+.run-head { padding: 12px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.run-head h2 { margin: 0; font: 700 15px/1.2 var(--font-display); }
+.run-head .n { font: 700 18px/1 var(--font-display); font-variant-numeric: tabular-nums; color: var(--muted); }
+.run-head .btn { margin-left: auto; }
+.run-body { padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.dl { border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--bg); display: flex; flex-direction: column; gap: 6px; }
+.dl.rush { border-color: var(--bad); box-shadow: inset 3px 0 0 var(--bad); }
+.dl-addr { font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
+.dl-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.dl-actions select { padding: 5px 8px; font-size: 13px; }
+
+/* Drawer */
+.scrim { position: fixed; inset: 0; background: rgba(10, 16, 22, .35); display: none; z-index: 10; }
+.scrim.open { display: block; }
+.drawer { position: fixed; top: 0; right: 0; height: 100%; width: min(520px, 100%); background: var(--surface); border-left: 1px solid var(--line); z-index: 11; transform: translateX(100%); transition: transform .18s ease; display: flex; flex-direction: column; }
+.drawer.open { transform: none; }
+@media (prefers-reduced-motion: reduce) { .drawer { transition: none; } }
+.d-head { padding: 18px 20px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 12px; align-items: flex-start; }
+.d-head h2 { margin: 0; font: 600 24px/1.1 var(--font-mono); }
+.d-head p { margin: 4px 0 0; font-weight: 600; }
+.d-body { padding: 16px 20px 28px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+dl.facts { display: grid; grid-template-columns: 110px 1fr; gap: 6px 12px; margin: 0; font-size: 14px; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; overflow-wrap: anywhere; white-space: pre-line; }
+.d-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+h3 { font: 700 13px/1.2 var(--font-display); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 8px; }
+ol.timeline { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+ol.timeline li { display: grid; grid-template-columns: 14px 1fr; gap: 10px; padding-bottom: 12px; position: relative; }
+ol.timeline li::before { content: ""; position: absolute; left: 6px; top: 14px; bottom: 0; width: 2px; background: var(--line); }
+ol.timeline li:last-child::before { display: none; }
+.dot { width: 14px; height: 14px; border-radius: 50%; border: 3px solid var(--accent); background: var(--surface); margin-top: 2px; }
+.dot.good { border-color: var(--good); } .dot.warn { border-color: var(--warn); } .dot.plain { border-color: var(--line); }
+.t-label { font-weight: 600; }
+.t-meta { font-size: 12.5px; color: var(--muted); }
+.closebtn { margin-left: auto; border: 1px solid var(--line); background: var(--surface); border-radius: 8px; width: 36px; height: 36px; cursor: pointer; flex: none; }
+
+/* Settings dialog */
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); max-width: 520px; width: calc(100% - 32px); padding: 0; }
+dialog::backdrop { background: rgba(10, 16, 22, .45); }
+.dlg { padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+.dlg h2 { margin: 0; font: 700 18px/1.2 var(--font-display); }
+.field { display: flex; flex-direction: column; gap: 6px; }
+.field label { font-weight: 600; font-size: 14px; }
+.field small { color: var(--muted); font-size: 12.5px; }
+.field input { padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.dlg-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+/* Sign-in */
+.signin { max-width: 460px; margin: 12vh auto 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 28px; display: flex; flex-direction: column; gap: 14px; }
+.signin h1 { margin: 0; font: 800 26px/1.15 var(--font-display); }
+.signin p { margin: 0; color: var(--muted); }
+
+.spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: sp 0.8s linear infinite; }
+@keyframes sp { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+
+/* Factory TV mode (#tv) */
+body.tv { font-size: 18px; }
+body.tv .controls, body.tv .tabs, body.tv .chips, body.tv #notice:empty { display: none; }
+body.tv .clock { display: block; font-size: 32px; }
+body.tv .brand h1 { font-size: 30px; }
+body.tv .board { min-width: 0; grid-template-columns: repeat(5, minmax(0, 1fr)); }
+body.tv .col-body { max-height: calc(100vh - 190px); }
+body.tv .jobno { font-size: 20px; }
+body.tv .co { font-size: 17px; }
+body.tv .desc { font-size: 15px; }
+body.tv .due { font-size: 16px; }
+body.tv .mach, body.tv .tag-run { font-size: 14px; }
+body.tv .tag-rush { font-size: 14px; }
+body.tv .col-head h2 { font-size: 19px; }
+body.tv .col-head .n { font-size: 26px; }
+body.tv .card .btn { display: none; }
+body.tv .wrap { max-width: none; }
+
+/* Printed run sheet */
+#printSheet { display: none; }
+@media print {
+  body { background: #fff; color: #000; font-size: 11pt; }
+  .wrap, .scrim, .drawer, dialog { display: none !important; }
+  #printSheet { display: block; }
+  #printSheet h1 { font: 700 18pt/1.2 var(--font-display); margin: 0 0 4pt; }
+  #printSheet p { margin: 0 0 10pt; }
+  #printSheet table { width: 100%; border-collapse: collapse; }
+  #printSheet th, #printSheet td { border: 1px solid #999; padding: 5pt 6pt; vertical-align: top; text-align: left; }
+  #printSheet td.addr { white-space: pre-line; }
+  #printSheet tr { page-break-inside: avoid; }
+}
+</style>
+</head>
+<body>
+<div id="signinView" class="signin" hidden>
+  <h1>Production Planner</h1>
+  <p>Sign in with the production@printstation.com.au Microsoft account to see live jobs from PrintLogic.</p>
+  <button class="btn primary" id="signinBtn" type="button">Sign in with Microsoft</button>
+  <p class="t-meta" id="signinMsg"></p>
+</div>
+
+<div class="wrap" id="app" hidden>
+  <header>
+    <div class="brand">
+      <svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><circle cx="17" cy="17" r="10" fill="none" stroke="currentColor" stroke-width="2"/><path d="M17 2v30M2 17h30" stroke="currentColor" stroke-width="2"/><circle cx="17" cy="17" r="4" fill="var(--accent)"/></svg>
+      <div><h1>Production Planner</h1><small id="whoLine">Print Station · PrintLogic status emails</small></div>
+    </div>
+    <div class="clock" id="clock"></div>
+    <div class="controls">
+      <label class="search" for="q">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l4 4" stroke="currentColor" stroke-width="1.6"/></svg>
+        <input id="q" type="search" placeholder="Job number, company, PO, machine" autocomplete="off" aria-label="Search jobs">
+      </label>
+      <select id="range" aria-label="How far back to read">
+        <option value="14">Last 14 days</option>
+        <option value="30" selected>Last 30 days</option>
+        <option value="60">Last 60 days</option>
+      </select>
+      <button class="btn" id="refresh" type="button">Refresh</button>
+      <button class="btn ghost" id="settingsBtn" type="button" aria-label="Settings">Settings</button>
+    </div>
+  </header>
+
+  <div id="notice"></div>
+  <div class="status-line" id="statusLine"></div>
+  <nav class="tabs" role="tablist" id="tabs"></nav>
+  <div class="chips" id="chips"></div>
+
+  <div class="board-scroll" id="boardWrap"><section class="board" id="board" aria-live="polite"></section></div>
+  <section class="runs" id="runs"></section>
+  <section class="list" id="list" aria-live="polite"></section>
+</div>
+
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer" aria-hidden="true" aria-label="Job details"></aside>
+<div id="printSheet"></div>
+
+<dialog id="settings">
+  <form class="dlg" method="dialog" id="settingsForm">
+    <h2>Settings</h2>
+    <div class="field">
+      <label for="myName">Your name on this device</label>
+      <input id="myName" type="text" autocomplete="name" placeholder="e.g. Tony">
+      <small>Shown next to deliveries and rush flags you set, since everyone shares one login.</small>
+    </div>
+    <div class="field">
+      <label for="runList">Delivery runs</label>
+      <input id="runList" type="text">
+      <small>Separate with commas. Changes show on every screen.</small>
+    </div>
+    <div class="field">
+      <label for="clearBefore">Clear old completed jobs</label>
+      <div class="dlg-row"><input id="clearBefore" type="date"><button class="btn small" type="button" id="clearBtn">Mark as delivered</button></div>
+      <small>Marks every scanned-complete job finished before this date as delivered. Use once when you start.</small>
+    </div>
+    <div class="field">
+      <label>Factory screen</label>
+      <small>Open this page with <b>#tv</b> at the end of the address on the floor screen. It shows the board in large type and refreshes itself.</small>
+    </div>
+    <div class="dlg-row"><button class="btn primary" type="submit" id="saveSettings">Save</button><button class="btn" type="button" id="signOut">Sign out of this device</button></div>
+  </form>
+</dialog>
+
+<script>
+(function () {
+  "use strict";
+  const CFG = window.PLANNER_CONFIG;
+  const GRAPH = "https://graph.microsoft.com/v1.0";
+  const SCOPES = ["User.Read", "Mail.Read", "Files.ReadWrite"];
+  const TZ = "Australia/Sydney";
+  const SENDER = CFG.sender.toLowerCase();
+  const RUSH_RE = /\b(urgent|asap|rush)\b/i;
+
+  const STAGES = [
+    { key: "created", label: "Created", rank: 1 },
+    { key: "prepress", label: "Prepress", rank: 2 },
+    { key: "printed", label: "Printed", rank: 3 },
+    { key: "completed", label: "Completed", rank: 4 },
+    { key: "pickup", label: "Ready for pickup", rank: 5 }
+  ];
+  const RANK = Object.fromEntries(STAGES.map(s => [s.key, s.rank]));
+  const TABS = [
+    { id: "board", label: "Planner board · active jobs", cls: "" },
+    { id: "to-deliver", label: "Deliveries · by run", cls: "deliver" },
+    { id: "pickup", label: "Pickup · customer emailed", cls: "pickup" },
+    { id: "done", label: "Delivered / collected", cls: "" },
+    { id: "all", label: "All jobs", cls: "" }
+  ];
+  const COLUMNS = [
+    { id: "created", title: "Created", sub: "New jobs, not in prepress yet" },
+    { id: "prepress", title: "Queued by machine", sub: "Through prepress, waiting to print", lanes: true },
+    { id: "printed", title: "Printed · finishing", sub: "Off the press, not scanned complete" },
+    { id: "to-deliver", title: "Scanned complete", sub: "Ready to deliver", cls: "c-deliver", action: "delivered" },
+    { id: "pickup", title: "Pickup", sub: "Customer emailed to collect", cls: "c-pickup", action: "collected" }
+  ];
+  const ACTIVE = new Set(["created", "prepress", "printed", "to-deliver", "pickup"]);
+
+  const state = {
+    account: null,
+    emails: new Map(), jobs: new Map(), machines: {},
+    shared: { marks: {}, rush: {}, runs: {}, runList: null }, sharedTag: null,
+    tab: "board", q: "", machineFilter: "",
+    loading: false, loaded: 0, error: null, fetchedAt: null, newest: null,
+    openJob: null, lookup: {}, tv: false
+  };
+
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : v; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+  };
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const runList = () => (state.shared.runList && state.shared.runList.length ? state.shared.runList : CFG.defaultRuns);
+  const myName = () => store.get("pp-name", "") || "Someone";
+
+  // ================= Microsoft sign-in =================
+  const configured = !/PASTE-/.test(CFG.clientId + CFG.tenantId);
+  let msal = null;
+  async function initAuth() {
+    if (!configured) { showSignin("This page isn't set up yet. Put the Application (client) ID and Directory (tenant) ID into the settings at the top of index.html. SETUP.md step 1 shows where to find them."); $("signinBtn").disabled = true; return false; }
+    if (!window.msal) { showSignin("The Microsoft sign-in library didn't load. Check the internet connection and reload."); return false; }
+    msal = new window.msal.PublicClientApplication({
+      auth: { clientId: CFG.clientId, authority: "https://login.microsoftonline.com/" + CFG.tenantId, redirectUri: location.origin + location.pathname },
+      cache: { cacheLocation: "localStorage" }
+    });
+    try { const res = await msal.handleRedirectPromise(); if (res && res.account) msal.setActiveAccount(res.account); }
+    catch (e) { showSignin("Sign-in didn't finish: " + (e.errorMessage || e.message || e)); return false; }
+    const acc = msal.getActiveAccount() || msal.getAllAccounts()[0];
+    if (!acc) { showSignin(""); return false; }
+    msal.setActiveAccount(acc); state.account = acc;
+    return true;
+  }
+  function showSignin(msg) { $("signinView").hidden = false; $("app").hidden = true; $("signinMsg").textContent = msg || ""; }
+  $("signinBtn").addEventListener("click", () => { if (msal) msal.loginRedirect({ scopes: SCOPES, loginHint: CFG.mailbox, prompt: "select_account" }); });
+
+  async function token() {
+    const account = msal.getActiveAccount();
+    try { return (await msal.acquireTokenSilent({ scopes: SCOPES, account })).accessToken; }
+    catch (e) {
+      if (e instanceof window.msal.InteractionRequiredAuthError || /interaction_required|login_required|consent_required/.test(e.errorCode || "")) {
+        await msal.acquireTokenRedirect({ scopes: SCOPES, account });
+      }
+      throw e;
+    }
+  }
+  async function graph(path, opts = {}, attempt = 0) {
+    const t = await token();
+    const res = await fetch(path.startsWith("http") ? path : GRAPH + path, {
+      method: opts.method || "GET",
+      headers: Object.assign({ Authorization: "Bearer " + t }, opts.headers || {}),
+      body: opts.body
+    });
+    if ((res.status === 429 || res.status === 503 || res.status === 504) && attempt < 2) {
+      const ra = Number(res.headers.get("Retry-After")) || 2 + Math.random() * 3;
+      await sleep(Math.min(ra, 30) * 1000);
+      return graph(path, opts, attempt + 1);
+    }
+    if (!res.ok && !(opts.okStatuses || []).includes(res.status)) {
+      let detail = ""; try { const j = await res.json(); detail = (j.error && j.error.message) || ""; } catch (e) {}
+      const err = new Error(detail || ("Microsoft returned " + res.status)); err.status = res.status; throw err;
+    }
+    return res;
+  }
+
+  // ================= Parsing PrintLogic emails =================
+  function classify(subject) {
+    const s = subject || ""; let m;
+    if ((m = s.match(/ready to be picked up at (?:our )?(.+)$/i))) return { kind: "pickup", label: "Ready for pickup", site: m[1].split(",").pop().replace(/\s*Factory\s*$/i, "").trim() };
+    if ((m = s.match(/is completed at\s+([A-Za-z ]+?)\s*-/i))) return { kind: "completed", label: "Scanned complete", site: m[1].trim() };
+    if (/-\s*Completed\s*$/i.test(s)) return { kind: "completed", label: "Scanned complete" };
+    if (/Waiting for Payment/i.test(s)) return { kind: "awaitpay", label: "Waiting for payment", by: (s.match(/Payment\s*-\s*(.+)$/i) || [])[1] };
+    if (/Invoiced/i.test(s)) return { kind: "invoiced", label: "Invoiced", by: (s.match(/By\s+(.+)$/i) || [])[1] };
+    if (/Created by:/i.test(s)) return { kind: "created", label: "Job created", by: (s.match(/Created by:\s*(.+)$/i) || [])[1] };
+    if ((m = s.match(/-\s*(.*?Printed.*)$/i))) return { kind: "printed", label: m[1].replace(/\s*\(.*\)\s*$/, "").trim() || "Printed" };
+    if (/Prepress/i.test(s)) return { kind: "prepress", label: "Prepress" };
+    return { kind: "other", label: s.replace(/^\s*\d{6}\s*-?\s*/, "") || "Update" };
+  }
+  function jobNoOf(subject) { const m = (subject || "").match(/(?:^|\D)(\d{6})(?!\d)/); return m ? m[1] : null; }
+  function amountOf(subject) { const m = (subject || "").match(/\$([\d,]+\.\d{2})/); return m ? "$" + m[1] : null; }
+
+  // The jobsheet PDF (indexed by Microsoft Search) reads "Print Station Production <MACHINE> JOB NO. 313850a".
+  function machineOf(summary) {
+    const s = String(summary || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ");
+    const m = s.match(/Production\s+(.{0,40}?)\s*JOB NO\.?\s*(\d{6})/i)
+      || s.match(/(HP Indigo|Xerox Versant|Digital Press|RMGT ?\d*|SM52(?: - \w+)?|GTO ?52|Offset Print|NCR)(?: ws_machine)?\s*JOB NO\.?\s*(\d{6})/i);
+    if (!m) return null;
+    const name = m[1].replace(/\bws_machine\b/i, "").replace(/^[\s\-–]+|[\s\-–]+$/g, "").trim();
+    return { jobNo: m[2], machine: name };
+  }
+  function noteMachine(subject, summary, at) {
+    const r = machineOf(summary); if (!r) return;
+    const jobNo = jobNoOf(subject) || r.jobNo;
+    const prev = state.machines[jobNo];
+    if (!r.machine && prev) return;
+    if (!prev || !prev.machine || String(at) > String(prev.at)) state.machines[jobNo] = { machine: r.machine, at };
+  }
+
+  const LABELS = ["Order Date:", "Company:", "Email:", "Contact:", "Job:", "Client PO:", "Description:", "Delivery address:", "Delivery Instruction:", "Date Due:", "Order #:"];
+  function fields(text) {
+    const t = String(text || "").replace(/ /g, " ").replace(/\r/g, "");
+    const hits = [];
+    LABELS.forEach(l => { const i = t.indexOf(l); if (i >= 0) hits.push({ l, i }); });
+    hits.sort((a, b) => a.i - b.i);
+    const f = {};
+    hits.forEach((h, k) => {
+      const end = k + 1 < hits.length ? hits[k + 1].i : t.length;
+      let v = t.slice(h.i + h.l.length, end);
+      v = v.replace(/_{4,}[\s\S]*$/, "").replace(/Print Station Production[\s\S]*$/, "").replace(/(\.\.\.|…)\s*$/, "");
+      v = v.replace(/[ \t]+/g, " ").replace(/\s*\n\s*/g, "\n").trim();
+      f[h.l.replace(":", "")] = v;
+    });
+    if (f["Contact"]) { const ph = f["Contact"].match(/Ph:\s*(.*)$/); if (ph) f["Phone"] = ph[1].trim(); f["Contact"] = f["Contact"].replace(/\s*Ph:.*$/, "").trim(); }
+    return f;
+  }
+  const better = (a, b) => (!a ? (b || "") : !b ? a : (b.length > a.length ? b : a));
+
+  function addEmail(e) {
+    if (!e || !e.subject) return;
+    const key = e.internetMessageId || e.id;
+    if (state.emails.has(key)) return;
+    const jobNo = jobNoOf(e.subject); if (!jobNo) return;
+    state.emails.set(key, true);
+    const c = classify(e.subject);
+    let job = state.jobs.get(jobNo);
+    if (!job) { job = { jobNo, events: [], company: "", contact: "", phone: "", email: "", description: "", po: "", delivery: "", due: "", orderDate: "" }; state.jobs.set(jobNo, job); }
+    job.events.push(Object.assign({}, c, { at: e.receivedDateTime, webLink: e.webLink, amount: amountOf(e.subject) }));
+    const f = fields(e.text);
+    if (c.kind === "pickup") {
+      job.description = job.description || f["Description"] || "";
+      job.delivery = job.delivery || f["Delivery Instruction"] || "";
+      if (!job.company) { const m = String(e.text || "").match(/_{4,}\s*\n+\s*([^\n]+)\n/); if (m) job.company = m[1].trim(); }
+    } else {
+      job.company = better(job.company, f["Company"]);
+      job.contact = better(job.contact, f["Contact"]);
+      job.phone = better(job.phone, f["Phone"]);
+      job.email = better(job.email, f["Email"]);
+      job.description = better(job.description, f["Description"]);
+      job.po = better(job.po, f["Client PO"]);
+      job.delivery = better(job.delivery, f["Delivery address"]);
+      job.orderDate = job.orderDate || f["Order Date"] || "";
+      const due = (f["Date Due"] || "").match(/\d{4}-\d{2}-\d{2}/);
+      if (due && due[0] !== "0000-00-00") job.due = due[0];
+    }
+    if (!job.company && c.kind === "created") { const m = e.subject.match(/^\s*\d{6}\s*-\s*(.+?)\s*--/); if (m) job.company = m[1]; }
+  }
+
+  function derive(job) {
+    job.events.sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    let rank = 0, stage = null;
+    job.events.forEach(ev => { const r = RANK[ev.kind] || 0; if (r > rank) { rank = r; stage = ev.kind; } });
+    job.rank = rank; job.stage = stage;
+    job.invoiced = job.events.some(e => e.kind === "invoiced");
+    job.awaitPay = job.events.some(e => e.kind === "awaitpay");
+    job.pickupNotified = job.events.some(e => e.kind === "pickup");
+    job.pickupSite = (job.events.find(e => e.kind === "pickup") || job.events.find(e => e.site) || {}).site || "";
+    job.completedAt = (job.events.find(e => e.kind === "completed") || {}).at || "";
+    job.wantsPickup = /\bpick\s*-?\s*up\b|\bcollect(ion|ed)?\b/i.test(job.delivery || "") && !/deliver/i.test(job.delivery || "");
+    job.lastAt = job.events.length ? job.events[0].at : "";
+    job.amount = (job.events.find(e => e.amount) || {}).amount || "";
+    job.machine = (state.machines[job.jobNo] || {}).machine || "";
+    const manual = state.shared.rush[job.jobNo];
+    job.autoRush = RUSH_RE.test(job.description + " " + job.delivery);
+    job.rush = manual ? manual.value : job.autoRush;
+    job.run = state.shared.runs[job.jobNo] ? state.shared.runs[job.jobNo].value : "";
+    const mark = state.shared.marks[job.jobNo];
+    if (mark && mark.status) job.bucket = "done";
+    else if (job.pickupNotified || (rank === 4 && job.wantsPickup)) job.bucket = "pickup";
+    else if (rank === 4) job.bucket = "to-deliver";
+    else if (rank === 3) job.bucket = "printed";
+    else if (rank === 2) job.bucket = "prepress";
+    else if (rank === 1) job.bucket = "created";
+    else job.bucket = "other";
+    return job;
+  }
+
+  // ================= Loading mail =================
+  async function loadMessages(sinceIso, inclusive) {
+    const params = new URLSearchParams({
+      "$filter": `receivedDateTime ${inclusive ? "ge" : "gt"} ${sinceIso}`,
+      "$orderby": "receivedDateTime desc",
+      "$select": "id,subject,receivedDateTime,body,webLink,internetMessageId,from",
+      "$top": "100"
+    });
+    let url = "/me/messages?" + params.toString(), pages = 0;
+    while (url && pages < 40) {
+      const res = await graph(url, { headers: { Prefer: 'outlook.body-content-type="text"' } });
+      const j = await res.json();
+      (j.value || []).forEach(m => {
+        const from = ((m.from && m.from.emailAddress && m.from.emailAddress.address) || "").toLowerCase();
+        if (from !== SENDER) return;
+        if (!state.newest || m.receivedDateTime > state.newest) state.newest = m.receivedDateTime;
+        addEmail({ id: m.id, internetMessageId: m.internetMessageId, subject: m.subject, receivedDateTime: m.receivedDateTime, webLink: m.webLink, text: m.body && m.body.content });
+        state.loaded++;
+      });
+      url = j["@odata.nextLink"] || null; pages++;
+      render();
+    }
+  }
+  async function loadMachines(sinceDate) {
+    let from = 0;
+    for (let i = 0; i < 40; i++) {
+      const res = await graph("/search/query", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requests: [{ entityTypes: ["message"], query: { queryString: `"JOB NO." from:${CFG.sender} received>=${sinceDate}` }, from, size: 25 }] })
+      });
+      const j = await res.json();
+      const c = j.value && j.value[0] && j.value[0].hitsContainers && j.value[0].hitsContainers[0];
+      const hits = (c && c.hits) || [];
+      hits.forEach(h => { const r = h.resource || {}; noteMachine(r.subject, h.summary, r.receivedDateTime); });
+      if (!c || !c.moreResultsAvailable || !hits.length) break;
+      from += hits.length;
+      if (i % 3 === 2) render();
+    }
+  }
+  async function loadAll(full) {
+    if (state.loading) return;
+    state.loading = true; state.error = null;
+    if (full) { state.emails.clear(); state.jobs.clear(); state.newest = null; state.loaded = 0; }
+    render();
+    const days = Number($("range").value) || 30;
+    const startIso = new Date(Date.now() - days * 86400000).toISOString();
+    try {
+      const incremental = !full && state.newest;
+      const since = incremental ? state.newest : startIso.slice(0, 10) + "T00:00:00Z";
+      const machSince = (incremental ? new Date(new Date(state.newest).getTime() - 86400000).toISOString() : startIso).slice(0, 10);
+      await Promise.all([
+        loadMessages(since, !incremental),
+        loadMachines(machSince).catch(err => { state.machineError = err; })
+      ]);
+      state.fetchedAt = Date.now();
+    } catch (err) { state.error = err; }
+    state.loading = false;
+    render();
+  }
+  async function lookupJob(jobNo) {
+    if (state.lookup[jobNo]) return;
+    state.lookup[jobNo] = "loading"; render();
+    try {
+      const params = new URLSearchParams({ "$search": `"${jobNo}"`, "$select": "id,subject,receivedDateTime,body,webLink,internetMessageId,from", "$top": "50" });
+      const res = await graph("/me/messages?" + params.toString(), { headers: { Prefer: 'outlook.body-content-type="text"' } });
+      const j = await res.json();
+      (j.value || []).forEach(m => {
+        const from = ((m.from && m.from.emailAddress && m.from.emailAddress.address) || "").toLowerCase();
+        if (from === SENDER && jobNoOf(m.subject) === jobNo) addEmail({ id: m.id, internetMessageId: m.internetMessageId, subject: m.subject, receivedDateTime: m.receivedDateTime, webLink: m.webLink, text: m.body && m.body.content });
+      });
+      state.lookup[jobNo] = state.jobs.has(jobNo) ? "found" : "none";
+    } catch (e) { state.lookup[jobNo] = "error"; }
+    render();
+  }
+
+  // ================= Shared state (OneDrive JSON file) =================
+  const statePath = "/me/drive/root:/" + CFG.stateFile.split("/").map(encodeURIComponent).join("/");
+  async function readShared() {
+    const meta = await graph(statePath, { okStatuses: [404] });
+    if (meta.status === 404) return { data: { marks: {}, rush: {}, runs: {}, runList: null }, tag: null };
+    const m = await meta.json();
+    if (state.sharedTag && m.eTag === state.sharedTag) return null; // unchanged
+    let data;
+    try { data = await (await fetch(m["@microsoft.graph.downloadUrl"])).json(); }
+    catch (e) { data = await (await graph(statePath + ":/content")).json(); }
+    return { data: Object.assign({ marks: {}, rush: {}, runs: {}, runList: null }, data), tag: m.eTag };
+  }
+  async function pullShared() {
+    try {
+      const r = await readShared();
+      if (r) { state.shared = r.data; state.sharedTag = r.tag; render(); }
+      state.sharedError = null;
+    } catch (e) { state.sharedError = e; render(); }
+  }
+  // Apply a change to the freshest copy and write it back; retry if someone else saved in between.
+  async function changeShared(mutate) {
+    mutate(state.shared); render();
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        state.sharedTag = null;
+        const fresh = await readShared();
+        const data = fresh.data; mutate(data);
+        const headers = { "Content-Type": "application/json" };
+        if (fresh.tag) headers["If-Match"] = fresh.tag;
+        const res = await graph(statePath + ":/content", { method: "PUT", headers, body: JSON.stringify(data), okStatuses: [412] });
+        if (res.status === 412) { await sleep(300 + Math.random() * 700); continue; }
+        const m = await res.json();
+        state.shared = data; state.sharedTag = m.eTag; state.saveError = null; render();
+        return;
+      } catch (e) {
+        if (attempt === 3) { state.saveError = "That change didn't save: " + esc(e.message) + ". Check the connection and try again."; await pullShared(); return; }
+        await sleep(800);
+      }
+    }
+  }
+  const stamp = extra => Object.assign({ by: myName(), at: new Date().toISOString() }, extra);
+  function setMark(jobNo, status) { changeShared(d => { if (status) d.marks[jobNo] = stamp({ status }); else delete d.marks[jobNo]; }); }
+  function setRush(jobNo, value) { changeShared(d => { d.rush[jobNo] = stamp({ value }); }); }
+  function setRun(jobNo, value) { changeShared(d => { if (value) d.runs[jobNo] = stamp({ value }); else delete d.runs[jobNo]; }); }
+
+  // ================= Formatting =================
+  const fmtDT = iso => { if (!iso) return ""; try { return new Date(iso).toLocaleString("en-AU", { timeZone: TZ, day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }); } catch (e) { return iso; } };
+  const todayStr = () => new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+  const fmtDue = d => d ? new Date(d + "T00:00:00").toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short" }) : "";
+  const oneLine = (s, n) => { s = String(s || "").replace(/\s*\n\s*/g, ", "); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
+  const machineKey = j => j.machine || "Not set";
+  const isOver = (j, today) => !!(j.due && j.due < today && j.bucket !== "done" && j.bucket !== "pickup");
+  const mapsLink = a => "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(String(a || "").replace(/\n/g, ", "));
+
+  // ================= Rendering =================
+  function visible() {
+    const all = [...state.jobs.values()].map(derive);
+    const q = state.q.trim().toLowerCase();
+    let list;
+    if (q) list = all.filter(j => [j.jobNo, j.company, j.description, j.po, j.contact, j.delivery, j.machine, j.run].some(v => String(v || "").toLowerCase().includes(q)));
+    else if (state.tab === "board") list = all.filter(j => ACTIVE.has(j.bucket));
+    else if (state.tab === "all") list = all;
+    else list = all.filter(j => j.bucket === state.tab);
+    if (state.machineFilter && !q) list = list.filter(j => machineKey(j) === state.machineFilter);
+    const byDue = state.tab !== "all" && state.tab !== "done" && !q;
+    list.sort((a, b) => {
+      if (byDue) {
+        if (a.rush !== b.rush) return a.rush ? -1 : 1;
+        const ad = a.due || "9999", bd = b.due || "9999";
+        if (ad !== bd) return ad.localeCompare(bd);
+      }
+      return String(b.lastAt).localeCompare(String(a.lastAt));
+    });
+    return { all, list };
+  }
+
+  function markBtn(j, kind) {
+    return kind === "delivered"
+      ? `<button class="btn small primary" type="button" data-mark="delivered" data-job="${j.jobNo}">Delivered</button>`
+      : `<button class="btn small" type="button" data-mark="collected" data-job="${j.jobNo}">Collected</button>`;
+  }
+  function runSelect(j) {
+    const opts = ['<option value="">Choose run…</option>'].concat(runList().map(r => `<option ${j.run === r ? "selected" : ""}>${esc(r)}</option>`));
+    if (j.run && !runList().includes(j.run)) opts.push(`<option selected>${esc(j.run)}</option>`);
+    return `<select data-run="${j.jobNo}" aria-label="Delivery run for job ${j.jobNo}">${opts.join("")}</select>`;
+  }
+
+  function card(j, col, today) {
+    const over = isOver(j, today);
+    const extra = col.id === "pickup" && j.pickupSite ? ` · ${esc(j.pickupSite)}` : "";
+    const action = col.action ? markBtn(j, col.action) : "";
+    return `<div class="card ${over ? "over" : ""} ${j.rush ? "rush" : ""}" data-open="${j.jobNo}" tabindex="0" role="button" aria-label="Open job ${j.jobNo}">
+      <div class="card-top"><span class="jobno">${j.jobNo}</span><span class="due ${over ? "over" : ""}">${j.due ? esc(fmtDue(j.due)) : "No due date"}${extra}</span></div>
+      <div class="co">${esc(j.company || "Unknown customer")}</div>
+      <div class="desc">${esc(oneLine(j.description, 70))}</div>
+      <div class="card-foot"><span style="display:flex;gap:5px;flex-wrap:wrap">${j.rush ? '<span class="tag-rush">RUSH</span>' : ""}<span class="mach ${j.machine ? "" : "none"}">${esc(machineKey(j))}</span>${col.id === "to-deliver" && j.run ? `<span class="tag-run">${esc(j.run)}</span>` : ""}</span>${action}</div>
+    </div>`;
+  }
+
+  function renderBoard(list) {
+    const today = todayStr();
+    $("board").innerHTML = COLUMNS.map(col => {
+      const jobs = list.filter(j => j.bucket === col.id);
+      let body;
+      if (!jobs.length) body = `<div class="col-empty">${state.loading ? "Loading…" : "None"}</div>`;
+      else if (col.lanes) {
+        const groups = {};
+        jobs.forEach(j => (groups[machineKey(j)] = groups[machineKey(j)] || []).push(j));
+        body = Object.keys(groups).sort((a, b) => (a === "Not set") - (b === "Not set") || groups[b].length - groups[a].length || a.localeCompare(b))
+          .map(m => `<div class="lane"><div class="lane-head"><span>${esc(m)}</span><span>${groups[m].length}</span></div>${groups[m].map(j => card(j, col, today)).join("")}</div>`).join("");
+      } else body = jobs.map(j => card(j, col, today)).join("");
+      return `<div class="col ${col.cls || ""}"><div class="col-head"><div><h2>${col.title}</h2><small>${col.sub}</small></div><span class="n">${jobs.length}</span></div><div class="col-body">${body}</div></div>`;
+    }).join("");
+  }
+
+  function renderRuns(list) {
+    const today = todayStr();
+    const groups = [{ name: "", title: "Needs a run", cls: "unassigned" }].concat(runList().map(r => ({ name: r, title: r })));
+    const extra = [...new Set(list.map(j => j.run).filter(r => r && !runList().includes(r)))];
+    extra.forEach(r => groups.push({ name: r, title: r }));
+    $("runs").innerHTML = groups.map(g => {
+      const jobs = list.filter(j => (j.run || "") === g.name);
+      if (!jobs.length && g.name === "" ) return `<div class="run unassigned"><div class="run-head"><h2>${g.title}</h2><span class="n">0</span></div><div class="run-body"><div class="col-empty">${state.loading ? "Loading…" : "Every ready job has a run."}</div></div></div>`;
+      return `<div class="run ${g.cls || ""}">
+        <div class="run-head"><h2>${esc(g.title)}</h2><span class="n">${jobs.length}</span>${g.name && jobs.length ? `<button class="btn small" type="button" data-print="${esc(g.name)}">Print run sheet</button>` : ""}</div>
+        <div class="run-body">${jobs.length ? jobs.map(j => {
+          const over = isOver(j, today);
+          return `<div class="dl ${j.rush ? "rush" : ""}">
+            <div class="card-top"><span class="jobno" data-open="${j.jobNo}" style="cursor:pointer">${j.jobNo}</span><span class="due ${over ? "over" : ""}">${j.rush ? '<span class="tag-rush">RUSH</span> ' : ""}${j.due ? esc(fmtDue(j.due)) : "No due date"}${over ? " · overdue" : ""}</span></div>
+            <div class="co" data-open="${j.jobNo}" style="cursor:pointer">${esc(j.company || "Unknown customer")}</div>
+            <div class="desc">${esc(oneLine(j.description, 90))}</div>
+            ${j.delivery ? `<div class="dl-addr">${esc(j.delivery)}</div>` : ""}
+            <div class="dl-actions">${runSelect(j)}${markBtn(j, "delivered")}${j.delivery ? `<a class="btn small ghost" href="${esc(mapsLink(j.delivery))}" target="_blank" rel="noopener">Map</a>` : ""}</div>
+          </div>`;
+        }).join("") : '<div class="col-empty">No jobs on this run.</div>'}</div>
+      </div>`;
+    }).join("");
+  }
+
+  function stagePill(j) {
+    const mark = state.shared.marks[j.jobNo];
+    if (mark && mark.status) return `<span class="pill good">${mark.status === "collected" ? "Collected" : "Delivered"}</span>`;
+    if (j.bucket === "pickup") return `<span class="pill warn">${j.pickupNotified ? "Customer emailed" : "Pickup"}</span>`;
+    if (j.rank === 4) return `<span class="pill">Scanned complete${j.pickupSite ? " · " + esc(j.pickupSite) : ""}</span>`;
+    const s = STAGES.find(s => s.key === j.stage);
+    return `<span class="pill plain">${s ? s.label : "Update"}</span>`;
+  }
+
+  function renderList(list) {
+    const q = state.q.trim();
+    const today = todayStr();
+    let html = "";
+    if (list.length) {
+      html = `<div class="row head"><span>Job</span><span>Customer · item</span><span class="col-where">Delivery</span><span class="col-due">Due</span><span style="text-align:right">Status</span></div>` +
+        list.map(j => {
+          const over = isOver(j, today);
+          const dueTxt = j.due ? fmtDue(j.due) : "—";
+          const action = j.bucket === "to-deliver" ? markBtn(j, "delivered") : j.bucket === "pickup" ? markBtn(j, "collected") : "";
+          return `<div class="row" data-open="${j.jobNo}" tabindex="0" role="button" aria-label="Open job ${j.jobNo}">
+            <span class="jobno">${j.jobNo}</span>
+            <span><div class="co">${j.rush ? '<span class="tag-rush">RUSH</span> ' : ""}${esc(j.company || "Unknown customer")}</div><div class="desc">${esc(oneLine(j.description, 90))}${j.machine ? ` · <span class="mach">${esc(j.machine)}</span>` : ""}</div><div class="m-due due ${over ? "over" : ""}">Due ${esc(dueTxt)}${over ? " · overdue" : ""}</div></span>
+            <span class="where col-where">${esc(oneLine(j.delivery, 80)) || "—"}</span>
+            <span class="due col-due ${over ? "over" : ""}">${esc(dueTxt)}${over ? "<br>overdue" : ""}</span>
+            <span class="right">${stagePill(j)}${action}</span>
+          </div>`;
+        }).join("");
+    } else if (state.loading) html = `<div class="empty"><span class="spin" aria-hidden="true"></span> Reading PrintLogic emails…</div>`;
+    else if (q && /^\d{6}$/.test(q)) {
+      const st = state.lookup[q];
+      html = st === "loading" ? `<div class="empty"><span class="spin" aria-hidden="true"></span> Searching the whole mailbox for job ${esc(q)}…</div>`
+        : st === "none" ? `<div class="empty">No PrintLogic emails found for job ${esc(q)}.</div>`
+        : st === "error" ? `<div class="empty">The search for job ${esc(q)} failed. <button class="btn small" type="button" data-relookup="${esc(q)}">Try again</button></div>`
+        : `<div class="empty"><span class="spin" aria-hidden="true"></span> Searching…</div>`;
+    } else if (q) html = `<div class="empty">No jobs match “${esc(q)}” in this date range. Type a 6-digit job number to search the whole mailbox.</div>`;
+    else html = `<div class="empty">No jobs here.</div>`;
+    $("list").innerHTML = html;
+    if (q && /^\d{6}$/.test(q) && !state.jobs.has(q) && !state.lookup[q] && !state.loading) lookupJob(q);
+  }
+
+  function renderChips(all) {
+    const counts = {};
+    all.filter(j => ["created", "prepress", "printed"].includes(j.bucket)).forEach(j => counts[machineKey(j)] = (counts[machineKey(j)] || 0) + 1);
+    const names = Object.keys(counts).sort((a, b) => (a === "Not set") - (b === "Not set") || counts[b] - counts[a]);
+    $("chips").innerHTML = names.length ? `<span class="lbl">Machine</span><button class="chip" type="button" data-machine="" aria-pressed="${!state.machineFilter}">All</button>` +
+      names.map(n => `<button class="chip" type="button" data-machine="${esc(n)}" aria-pressed="${state.machineFilter === n}">${esc(n)} <b>${counts[n]}</b></button>`).join("") : "";
+  }
+
+  function render() {
+    const { all, list } = visible();
+    const counts = {};
+    TABS.forEach(t => counts[t.id] = t.id === "all" ? all.length : t.id === "board" ? all.filter(j => ACTIVE.has(j.bucket)).length : all.filter(j => j.bucket === t.id).length);
+    $("tabs").innerHTML = TABS.map(t => `<button class="tab ${t.cls}" role="tab" type="button" data-tab="${t.id}" aria-selected="${!state.q && state.tab === t.id}"><span class="n">${counts[t.id]}</span><span class="l">${t.label}</span></button>`).join("");
+
+    const q = state.q.trim();
+    const mode = q ? "list" : state.tab === "board" ? "board" : state.tab === "to-deliver" ? "runs" : "list";
+    $("boardWrap").style.display = mode === "board" ? "" : "none";
+    $("runs").style.display = mode === "runs" ? "" : "none";
+    $("list").style.display = mode === "list" ? "" : "none";
+    $("chips").style.display = mode === "board" ? "" : "none";
+    renderChips(all);
+    if (mode === "board") renderBoard(list);
+    else if (mode === "runs") renderRuns(list);
+    else renderList(list);
+
+    const bits = [];
+    if (state.loading) bits.push(`<span class="spin" aria-hidden="true"></span> Reading the mailbox… ${state.loaded} emails`);
+    else if (state.fetchedAt) bits.push(`${all.length} jobs from ${state.emails.size} PrintLogic emails · updated ${fmtDT(new Date(state.fetchedAt).toISOString())}`);
+    if (state.machineError) bits.push("Machine names couldn't be read this time, so some show as Not set.");
+    if (state.sharedError) bits.push("Shared ticks and runs couldn't be loaded: " + esc(state.sharedError.message));
+    $("statusLine").innerHTML = bits.map(b => `<span>${b}</span>`).join("");
+
+    if (state.error) {
+      const s = state.error.status;
+      showNotice({ cls: "bad", html: s === 401 || s === 403
+        ? "Microsoft refused access to the mailbox (" + s + "). Make sure you signed in as " + esc(CFG.mailbox) + " and that the app has Mail.Read and Files.ReadWrite permission (SETUP.md step 1)."
+        : "Couldn't read the mailbox: " + esc(state.error.message), retry: true });
+    } else if (state.saveError) showNotice({ cls: "bad", html: state.saveError });
+    else $("notice").innerHTML = state.wrongAccount || "";
+    renderDrawer();
+  }
+
+  function showNotice(n) {
+    $("notice").innerHTML = `<div class="notice ${n.cls}"><span>${n.html}</span>${n.retry ? '<button class="btn small" type="button" id="retry">Try again</button>' : ""}</div>`;
+  }
+
+  function renderDrawer() {
+    const d = $("drawer"), s = $("scrim");
+    const job = state.openJob && state.jobs.get(state.openJob);
+    if (!job) { d.classList.remove("open"); s.classList.remove("open"); d.setAttribute("aria-hidden", "true"); d.innerHTML = ""; return; }
+    derive(job);
+    d.classList.add("open"); s.classList.add("open"); d.setAttribute("aria-hidden", "false");
+    const mark = state.shared.marks[job.jobNo];
+    const rushInfo = state.shared.rush[job.jobNo];
+    const runInfo = state.shared.runs[job.jobNo];
+    const fact = (k, v) => v ? `<dt>${k}</dt><dd>${esc(v)}</dd>` : "";
+    const actions = mark && mark.status
+      ? `<span class="pill good">${mark.status === "collected" ? "Collected" : "Delivered"} · ${esc(fmtDT(mark.at))} · ${esc(mark.by)}</span><button class="btn small" type="button" data-mark="" data-job="${job.jobNo}">Undo</button>`
+      : `${markBtn(job, "delivered")}${markBtn(job, "collected")}`;
+    const dotCls = k => k === "completed" || k === "pickup" ? "good" : (k === "invoiced" || k === "awaitpay") ? "warn" : k === "other" ? "plain" : "";
+    d.innerHTML = `
+      <div class="d-head">
+        <div><h2>${job.jobNo}</h2><p>${esc(job.company || "Unknown customer")}</p>
+          <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">${job.rush ? '<span class="tag-rush">RUSH</span>' : ""}${stagePill(job)}${job.invoiced ? '<span class="pill plain">Invoiced</span>' : ""}${job.awaitPay ? '<span class="pill warn">Waiting for payment</span>' : ""}</div></div>
+        <button class="closebtn" type="button" id="closeDrawer" aria-label="Close">✕</button>
+      </div>
+      <div class="d-body">
+        <div class="d-actions">${actions}</div>
+        <div class="d-actions">
+          <label for="drawerRun" class="t-meta">Run</label>${runSelect(job).replace("<select ", '<select id="drawerRun" ')}
+          <button class="btn small" type="button" data-rush="${job.rush ? "off" : "on"}" data-job="${job.jobNo}">${job.rush ? "Remove RUSH" : "Flag as RUSH"}</button>
+        </div>
+        <div class="t-meta">${rushInfo ? `RUSH ${rushInfo.value ? "set" : "removed"} by ${esc(rushInfo.by)}, ${esc(fmtDT(rushInfo.at))}. ` : job.autoRush ? "Flagged RUSH automatically because the job says urgent or ASAP. " : ""}${runInfo ? `Run set by ${esc(runInfo.by)}, ${esc(fmtDT(runInfo.at))}.` : ""}</div>
+        <dl class="facts">
+          ${fact("Item", job.description)}
+          ${fact("Machine", job.machine)}
+          ${fact("Client PO", job.po)}
+          ${fact("Contact", job.contact)}
+          ${job.phone ? `<dt>Phone</dt><dd><a href="tel:${esc(job.phone.replace(/[^\d+]/g, ""))}">${esc(job.phone)}</a></dd>` : ""}
+          ${fact("Email", job.email)}
+          ${fact("Ordered", job.orderDate)}
+          ${fact("Due", job.due ? fmtDue(job.due) + " (" + job.due + ")" : "")}
+          ${job.delivery ? `<dt>Delivery</dt><dd>${esc(job.delivery)}\n<a href="${esc(mapsLink(job.delivery))}" target="_blank" rel="noopener">Open in Maps</a></dd>` : ""}
+          ${fact("Amount", job.amount)}
+        </dl>
+        <div>
+          <h3>History</h3>
+          <ol class="timeline">
+            ${job.events.map(ev => `<li><span class="dot ${dotCls(ev.kind)}"></span><div><div class="t-label">${esc(ev.label)}${ev.site ? " · " + esc(ev.site) : ""}${ev.amount ? " · " + esc(ev.amount) : ""}</div><div class="t-meta">${esc(fmtDT(ev.at))}${ev.by ? " · " + esc(ev.by) : ""}${ev.webLink ? ` · <a href="${esc(ev.webLink)}" target="_blank" rel="noopener">Open in Outlook</a>` : ""}</div></div></li>`).join("")}
+          </ol>
+        </div>
+      </div>`;
+  }
+
+  function printRun(run) {
+    const { all } = visible();
+    const jobs = all.filter(j => j.bucket === "to-deliver" && j.run === run).sort((a, b) => (b.rush - a.rush) || String(a.due || "9").localeCompare(String(b.due || "9")));
+    const now = new Date().toLocaleString("en-AU", { timeZone: TZ, weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit" });
+    $("printSheet").innerHTML = `<h1>Run sheet · ${esc(run)}</h1><p>${esc(now)} · ${jobs.length} job${jobs.length === 1 ? "" : "s"}</p>
+      <table><thead><tr><th>Job</th><th>Customer / item</th><th>Deliver to</th><th>Due</th><th>Signed / time</th></tr></thead><tbody>
+      ${jobs.map(j => `<tr><td><b>${j.jobNo}</b>${j.rush ? "<br>RUSH" : ""}</td><td><b>${esc(j.company)}</b><br>${esc(j.description)}${j.po ? "<br>PO " + esc(j.po) : ""}${j.contact ? "<br>" + esc(j.contact) + (j.phone ? " · " + esc(j.phone) : "") : ""}</td><td class="addr">${esc(j.delivery)}</td><td>${esc(fmtDue(j.due))}</td><td style="width:22%"></td></tr>`).join("")}
+      </tbody></table>`;
+    window.print();
+  }
+
+  // ================= Events =================
+  document.addEventListener("click", e => {
+    const t = e.target.closest("[data-tab],[data-open],[data-mark],[data-rush],[data-print],[data-relookup],[data-machine],#closeDrawer,#scrim,#retry");
+    if (!t) return;
+    if (t.dataset.mark !== undefined && t.dataset.job) { e.stopPropagation(); setMark(t.dataset.job, t.dataset.mark || null); return; }
+    if (t.dataset.rush && t.dataset.job) { setRush(t.dataset.job, t.dataset.rush === "on"); return; }
+    if (t.dataset.print) { printRun(t.dataset.print); return; }
+    if (t.dataset.machine !== undefined) { state.machineFilter = t.dataset.machine; render(); return; }
+    if (t.dataset.tab) { state.tab = t.dataset.tab; state.q = ""; $("q").value = ""; try { history.replaceState(null, "", "#" + state.tab); } catch (x) {} render(); return; }
+    if (t.dataset.relookup) { delete state.lookup[t.dataset.relookup]; lookupJob(t.dataset.relookup); return; }
+    if (t.dataset.open) { state.openJob = t.dataset.open; renderDrawer(); return; }
+    if (t.id === "closeDrawer" || t.id === "scrim") { state.openJob = null; renderDrawer(); return; }
+    if (t.id === "retry") { state.error = null; loadAll(false); }
+  });
+  document.addEventListener("change", e => {
+    const sel = e.target.closest("select[data-run]");
+    if (sel) setRun(sel.dataset.run, sel.value);
+  });
+  document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && state.openJob) { state.openJob = null; renderDrawer(); }
+    if ((e.key === "Enter" || e.key === " ") && e.target.dataset && e.target.dataset.open && e.target.getAttribute("role") === "button") { e.preventDefault(); state.openJob = e.target.dataset.open; renderDrawer(); }
+  });
+  let qTimer;
+  $("q").addEventListener("input", e => { clearTimeout(qTimer); qTimer = setTimeout(() => { state.q = e.target.value; render(); }, 150); });
+  $("refresh").addEventListener("click", () => { loadAll(true); pullShared(); });
+  $("range").addEventListener("change", () => { store.set("pp-range", $("range").value); loadAll(true); });
+
+  // Settings
+  $("settingsBtn").addEventListener("click", () => {
+    $("myName").value = store.get("pp-name", "");
+    $("runList").value = runList().join(", ");
+    $("settings").showModal();
+  });
+  $("settingsForm").addEventListener("submit", () => {
+    store.set("pp-name", $("myName").value.trim());
+    const runs = $("runList").value.split(",").map(s => s.trim()).filter(Boolean);
+    if (runs.length && runs.join("|") !== runList().join("|")) changeShared(d => { d.runList = runs; });
+  });
+  $("clearBtn").addEventListener("click", () => {
+    const before = $("clearBefore").value;
+    if (!before) { $("clearBefore").focus(); return; }
+    const { all } = visible();
+    const jobs = all.filter(j => j.bucket === "to-deliver" && j.completedAt && j.completedAt.slice(0, 10) < before).map(j => j.jobNo);
+    if (!jobs.length) { $("clearBtn").textContent = "Nothing to clear"; return; }
+    changeShared(d => { jobs.forEach(no => { if (!d.marks[no]) d.marks[no] = stamp({ status: "delivered", bulk: true }); }); });
+    $("clearBtn").textContent = jobs.length + " marked delivered";
+  });
+  $("signOut").addEventListener("click", () => { if (msal) msal.logoutRedirect({ account: msal.getActiveAccount() }); });
+
+  function fromHash() {
+    const h = (location.hash || "").slice(1);
+    state.tv = h === "tv";
+    document.body.classList.toggle("tv", state.tv);
+    if (state.tv) state.tab = "board";
+    else if (TABS.some(t => t.id === h)) state.tab = h;
+  }
+  window.addEventListener("hashchange", () => { fromHash(); render(); });
+  function tickClock() { $("clock").textContent = new Date().toLocaleTimeString("en-AU", { timeZone: TZ, hour: "numeric", minute: "2-digit" }); }
+
+  // ================= Boot =================
+  (async function boot() {
+    fromHash();
+    if (!state.tv && !location.hash && window.matchMedia("(max-width: 600px)").matches) state.tab = "to-deliver";
+    const r = store.get("pp-range", ""); if (r) $("range").value = r;
+    const ok = await initAuth();
+    if (!ok) return;
+    $("signinView").hidden = true; $("app").hidden = false;
+    const user = (state.account.username || "").toLowerCase();
+    $("whoLine").textContent = "Signed in as " + state.account.username;
+    if (user && user !== CFG.mailbox.toLowerCase()) {
+      state.wrongAccount = `<div class="notice warn"><span>You're signed in as ${esc(state.account.username)}, not ${esc(CFG.mailbox)}. The planner reads the mailbox of whoever signs in, so jobs may be missing.</span><button class="btn small" type="button" id="signOutNow">Sign in as production</button></div>`;
+      document.addEventListener("click", e => { if (e.target.id === "signOutNow") msal.logoutRedirect({ account: msal.getActiveAccount() }); });
+    }
+    tickClock(); setInterval(tickClock, 15000);
+    render();
+    pullShared();
+    loadAll(true);
+    // Keep the board current: new emails every 2 min (TV) or 5 min, shared ticks every 30 s.
+    setInterval(() => { if (!document.hidden) loadAll(false); }, state.tv ? 120000 : 300000);
+    setInterval(() => { if (!document.hidden) pullShared(); }, 30000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) { pullShared(); loadAll(false); } });
+  })();
+})();
+</script>
+</body>
+</html>
