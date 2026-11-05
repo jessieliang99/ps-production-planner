@@ -14,6 +14,8 @@
    SETTINGS — fill these in once (see SETUP.md, step 1)
    ============================================================ */
 window.PLANNER_CONFIG = {
+  // true = no sign-in, shows made-up example jobs (for trying the layout). Set to false to go live.
+  previewMode: true,
   clientId: "PASTE-APPLICATION-CLIENT-ID-HERE",
   tenantId: "PASTE-DIRECTORY-TENANT-ID-HERE",
   mailbox: "production@printstation.com.au",
@@ -324,6 +326,7 @@ body.tv .wrap { max-width: none; }
 (function () {
   "use strict";
   const CFG = window.PLANNER_CONFIG;
+  const PREVIEW = !!CFG.previewMode;
   const GRAPH = "https://graph.microsoft.com/v1.0";
   const SCOPES = ["User.Read", "Mail.Read", "Files.ReadWrite"];
   const TZ = "Australia/Sydney";
@@ -572,7 +575,50 @@ body.tv .wrap { max-width: none; }
       if (i % 3 === 2) render();
     }
   }
+  // ================= Preview: made-up example jobs =================
+  function loadDemo() {
+    state.emails.clear(); state.jobs.clear(); state.machines = {};
+    const day = 86400000, now = Date.now();
+    const iso = ms => new Date(ms).toISOString();
+    const ymd = ms => new Date(ms).toISOString().slice(0, 10);
+    const C = [
+      ["Harbour Bakery Co", "Mia Chen", "0400 111 201", "12 Wharf Rd, Rozelle NSW 2039"],
+      ["Northside Dental", "Dr Sam Patel", "02 9000 1102", "Suite 4, 88 Pacific Hwy, Chatswood NSW 2067"],
+      ["Greenleaf Landscaping", "Tom Riley", "0400 111 203", "5 Bush St, Penrith NSW 2750"],
+      ["Bright Minds Tutoring", "Ana Lopez", "0400 111 204", "pick up from Hurstville"],
+      ["Coastal Surf School", "Jake Moore", "0400 111 205", "21 Beach Pde, Cronulla NSW 2230"],
+      ["Summit Accounting", "Priya Nair", "02 9000 1106", "Level 3, 100 George St, Sydney NSW 2000"],
+      ["Little Sprouts Childcare", "Kate Wilson", "0400 111 207", "9 Park Ave, Kogarah NSW 2217"],
+      ["Redback Fitness", "Leo Grant", "0400 111 208", "collect from Carlton"],
+      ["Bluegum Real Estate", "Hannah Brooks", "02 9000 1109", "44 Forest Rd, Hurstville NSW 2220"],
+      ["Example Print Broker", "Chris Young", "0400 111 210", "Unit 7, 3 Industrial Dr, Alexandria NSW 2015"]
+    ];
+    const ITEMS = ["Business Cards x 500", "A5 Flyers x 2000", "URGENT A4 Brochure x 300", "NCR Invoice Books x 20", "Swing Tags x 1000", "Pull-up Banner x 2", "Christmas Cards x 250", "A3 Posters x 50", "Letterheads x 1000", "Booklets 24pp x 150 ASAP"];
+    const MACH = ["HP Indigo", "Digital Press", "RMGT 790", "SM52 - Flat", "GTO52", "Xerox Versant", ""];
+    const plan = ["created", "created", "created", "prepress", "prepress", "prepress", "prepress", "prepress", "prepress", "prepress", "printed", "printed", "printed", "completed", "completed", "completed", "completed", "completed", "pickup", "pickup", "pickup", "completed", "prepress", "created"];
+    let n = 0;
+    plan.forEach((stage, i) => {
+      const jobNo = String(900100 + i);
+      const [co, contact, ph, addr] = C[i % C.length];
+      const item = ITEMS[(i * 3) % ITEMS.length];
+      const created = now - (8 - (i % 8)) * day - i * 3600000;
+      const due = ymd(created + (3 + (i % 6)) * day);
+      const text = `Order Date: ${ymd(created)}\nCompany: ${co}\nEmail: hello@example.com\nContact: ${contact}  Ph: ${ph}\n\nJob: ${jobNo}\nClient PO: ${i % 3 ? "" : "PO-" + (4400 + i)}\n\nDescription: ${item}\n\nDelivery address:\n${addr}\n\nDate Due:  ${due}\n\n____\nPrint Station Production`;
+      const add = (subject, at) => addEmail({ id: "demo" + (n++), subject, receivedDateTime: iso(at), webLink: "", text });
+      add(`${jobNo} - ${co} -- $${(120 + i * 37).toFixed(2)} (GST Inclusive)  -- Created by: Example Staff`, created);
+      const steps = ["created", "prepress", "printed", "completed", "pickup"];
+      const upto = steps.indexOf(stage);
+      if (upto >= 1) add(`${jobNo} -  Prepress`, created + 4 * 3600000);
+      if (upto >= 2) add(`${jobNo} - ${i % 2 ? "HP" : "RMGT"} Printed`, created + 26 * 3600000);
+      if (upto >= 3) add(`${jobNo} is completed at Carlton -  ${co}  -`, created + 40 * 3600000);
+      if (upto >= 4) add(`${jobNo}  - Your order is ready to be picked up at 112 Durham Street, Hurstville`, created + 42 * 3600000);
+      state.machines[jobNo] = { machine: MACH[i % MACH.length], at: iso(created) };
+    });
+    state.loaded = n; state.fetchedAt = now;
+  }
+
   async function loadAll(full) {
+    if (PREVIEW) { loadDemo(); render(); return; }
     if (state.loading) return;
     state.loading = true; state.error = null;
     if (full) { state.emails.clear(); state.jobs.clear(); state.newest = null; state.loaded = 0; }
@@ -594,6 +640,7 @@ body.tv .wrap { max-width: none; }
   }
   async function lookupJob(jobNo) {
     if (state.lookup[jobNo]) return;
+    if (PREVIEW) { state.lookup[jobNo] = "none"; render(); return; }
     state.lookup[jobNo] = "loading"; render();
     try {
       const params = new URLSearchParams({ "$search": `"${jobNo}"`, "$select": "id,subject,receivedDateTime,body,webLink,internetMessageId,from", "$top": "50" });
@@ -621,6 +668,10 @@ body.tv .wrap { max-width: none; }
     return { data: Object.assign({ marks: {}, rush: {}, runs: {}, runList: null }, data), tag: m.eTag };
   }
   async function pullShared() {
+    if (PREVIEW) {
+      try { const s = JSON.parse(store.get("pp-preview-state", "null")); if (s) state.shared = Object.assign({ marks: {}, rush: {}, runs: {}, runList: null }, s); } catch (e) {}
+      render(); return;
+    }
     try {
       const r = await readShared();
       if (r) { state.shared = r.data; state.sharedTag = r.tag; render(); }
@@ -630,6 +681,7 @@ body.tv .wrap { max-width: none; }
   // Apply a change to the freshest copy and write it back; retry if someone else saved in between.
   async function changeShared(mutate) {
     mutate(state.shared); render();
+    if (PREVIEW) { store.set("pp-preview-state", JSON.stringify(state.shared)); return; }
     for (let attempt = 0; attempt < 4; attempt++) {
       try {
         state.sharedTag = null;
@@ -956,6 +1008,16 @@ body.tv .wrap { max-width: none; }
     fromHash();
     if (!state.tv && !location.hash && window.matchMedia("(max-width: 600px)").matches) state.tab = "to-deliver";
     const r = store.get("pp-range", ""); if (r) $("range").value = r;
+    if (PREVIEW) {
+      $("signinView").hidden = true; $("app").hidden = false;
+      $("whoLine").textContent = "Preview · example jobs, not connected to Outlook";
+      $("signOut").hidden = true;
+      state.wrongAccount = `<div class="notice warn"><span><b>Preview mode.</b> These are made-up example jobs so you can try the layout. Ticks, RUSH flags and runs are saved in this browser only. Live jobs from the production mailbox appear once sign-in is switched on.</span><button class="btn small" type="button" id="resetDemo">Reset examples</button></div>`;
+      document.addEventListener("click", e => { if (e.target.id === "resetDemo") { store.set("pp-preview-state", "null"); state.shared = { marks: {}, rush: {}, runs: {}, runList: null }; render(); } });
+      tickClock(); setInterval(tickClock, 15000);
+      pullShared(); loadAll(true);
+      return;
+    }
     const ok = await initAuth();
     if (!ok) return;
     $("signinView").hidden = true; $("app").hidden = false;
